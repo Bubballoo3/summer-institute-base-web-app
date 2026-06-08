@@ -46,6 +46,7 @@ class App < Sinatra::Base
 
   get '/' do
     logger.info('requsting the index')
+    @flash = session.delete(:flash) || { info: 'Welcome to Summer Institute!' }
     erb(:index)
   end
 
@@ -55,7 +56,7 @@ class App < Sinatra::Base
 
   post '/projects/new' do
     logger.info("Trying to create a project with: #{params.inspect}")
-    @flash = { info: "Trying to create a project with: #{params.inspect}" }
+    session[:flash] = { info: "Trying to create a project with: #{params.inspect}" }
 
     dirname = params[:name].tr(' ', '_').downcase
     "#{projects_root}/#{dirname}".tap { |d| FileUtils.mkdir_p(d) }
@@ -66,14 +67,38 @@ class App < Sinatra::Base
   get '/projects/:name' do
     @directory = Pathname.new("#{projects_root}/#{params[:name]}")
     @project_name = @directory.basename.to_s.tr('_', ' ').capitalize
+    @images = Dir.glob("#{@directory}/*.png")
     if params[:name] == 'new'
       erb(:new_project)
     elsif @directory.directory? && @directory.readable?
+      @flash = session.delete(:flash)
       erb(:show_project)
     else
       @flash = { danger: "The project '#{params[:name]}' does not exist" }
       redirect(url('/'))
     end
+  end
+
+  post '/render/frames' do
+    # format variables
+    blend_file = "#{__dir__}/blend_files/#{params[:blend_file]}"
+    walltime = format('%02d:00:00', params[:walltime])
+    dir = params[:project_directory]
+
+    # construct options array
+    args = ['-J', "blender-#{params[:blend_file]}", '--parsable', '-A', params[:account]]
+    args.concat ['--export', "BLEND_FILE_PATH=#{blend_file},OUTPUT_DIR=#{dir},FRAME_RANGE=#{params[:frame_range]}"]
+    args.concat ['-n', params[:num_cpus], '-N', '1', '-t', walltime, '-M', 'cardinal']
+    args.concat ['--output', "#{dir}/%j.out"]
+
+    # submit command
+    output = `/bin/sbatch #{args.join(' ')} #{__dir__}/scripts/render_frames.sh 2>&1`
+
+    job_id = output.split(';').first
+    
+    session[:flash] = { info: "submitted job #{job_id}" }
+    logger.info("#{session.inspect}")
+    redirect(url("/projects/#{dir.split('/').last}"))
   end
 
   private
